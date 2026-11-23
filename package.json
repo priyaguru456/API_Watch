@@ -1,0 +1,19 @@
+{
+  "name": "apiwatch",
+  "version": "1.0.0",
+  "description": "APIWatch — API Monitoring and Reliability Platform",
+  "private": true,
+  "scripts": {
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build:frontend": "npm --prefix frontend run build"
+  },
+  "keywords": [
+    "api-monitoring",
+    "uptime",
+    "reliability",
+    "observability"
+  ],
+  "author": "",
+  "license": "ISC"
+}
