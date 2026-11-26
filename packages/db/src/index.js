@@ -38,4 +38,6 @@ export async function checkDatabaseHealth(client = prisma) {
   }
 }
 
+export { createMockPrisma } from './mock-db.js';
+export { withTenantTransaction, tenantRlsExtension } from './extension.js';
 export * from '@prisma/client';

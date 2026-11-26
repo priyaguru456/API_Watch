@@ -71,60 +71,92 @@ model Organization {
   updatedAt DateTime @updatedAt
 
   memberships  Membership[]
+  customRoles  CustomRole[]
   invitations  Invitation[]
+  apiKeys      ApiKey[]
   monitors     Monitor[]
   checkResults CheckResult[]
   incidents    Incident[]
   auditLogs    AuditLog[]
+  keys         OrganizationKey[]
 
   @@map("organizations")
 }
 
-// User Model
+// User Model with Authentication & Verification
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  passwordHash String
-  name         String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                     String    @id @default(uuid())
+  email                  String    @unique
+  passwordHash           String
+  name                   String?
+  emailVerified          Boolean   @default(false)
+  emailVerifyToken       String?   @unique
+  emailVerifyExpiresAt   DateTime?
+  passwordResetToken     String?   @unique
+  passwordResetExpiresAt DateTime?
+  totpSecret             String?   // AES-256-GCM encrypted via packages/vault
+  totpEnabled            Boolean   @default(false)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
-  memberships  Membership[]
-  refreshTokens RefreshToken[]
-  invitationsCreated Invitation[] @relation("InvitedByUser")
-  auditLogs    AuditLog[]
+  memberships        Membership[]
+  refreshTokens      RefreshToken[]
+  invitationsCreated Invitation[]      @relation("InvitedByUser")
+  apiKeys            ApiKey[]
+  auditLogs          AuditLog[]
 
   @@map("users")
 }
 
-// Organization Membership (Tenant RBAC: OWNER | ADMIN | ENGINEER | VIEWER)
+// Organization Custom Roles for Granular Permissions
+model CustomRole {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  description    String?
+  permissions    Json     // JSONB array: ["monitors:read", "monitors:create", ...]
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  memberships  Membership[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@map("custom_roles")
+}
+
+// Organization Membership (Tenant RBAC: OWNER | ADMIN | ENGINEER | VIEWER or custom role)
 model Membership {
-  id             String         @id @default(uuid())
+  id             String          @id @default(uuid())
   organizationId String
   userId         String
-  role           MembershipRole @default(VIEWER)
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  role           MembershipRole  @default(VIEWER)
+  customRoleId   String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customRole   CustomRole?  @relation(fields: [customRoleId], references: [id], onDelete: SetNull)
 
   @@unique([organizationId, userId])
   @@index([organizationId])
   @@index([userId])
+  @@index([customRoleId])
   @@map("memberships")
 }
 
 // Rotating Refresh Token for HTTP-only Secure Cookie Flow
 model RefreshToken {
-  id           String   @id @default(uuid())
-  userId       String
-  tokenHash    String   @unique
-  family       String   // UUID token family for rotation & replay detection
-  isRevoked    Boolean  @default(false)
-  expiresAt    DateTime
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String   @unique
+  family    String   // UUID token family for rotation & replay detection
+  isRevoked Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -139,6 +171,7 @@ model Invitation {
   organizationId String
   email          String
   role           MembershipRole   @default(VIEWER)
+  customRoleId   String?
   token          String           @unique
   expiresAt      DateTime
   status         InvitationStatus @default(PENDING)
@@ -152,6 +185,29 @@ model Invitation {
   @@index([organizationId])
   @@index([email])
   @@map("invitations")
+}
+
+// Hashed Scoped API Key for Tenant Automation
+model ApiKey {
+  id             String    @id @default(uuid())
+  organizationId String
+  userId         String?
+  name           String
+  keyHash        String    @unique // SHA-256 hash of secret key
+  keyPrefix      String    // e.g. "ak_live_abc123" for identification
+  scopes         Json      // JSONB array: ["monitors:read", "monitors:write"]
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  isRevoked      Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([keyHash])
+  @@map("api_keys")
 }
 
 // Monitored API Endpoint
@@ -168,7 +224,7 @@ model Monitor {
   body            Json?         // JSONB: payload
   assertionConfig Json?         // JSONB: assertion rules
   status          MonitorStatus @default(ACTIVE)
-  encryptedAuth   String?       // AES-256-GCM encrypted credentials at rest
+  encryptedAuth   String?       // AES-256-GCM encrypted credentials via packages/vault
   lastCheckedAt   DateTime?
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
@@ -236,6 +292,10 @@ model AuditLog {
   action         String
   entityType     String
   entityId       String?
+  ipAddress      String?
+  userAgent      String?
+  before         Json?    // JSONB: redacted state before action
+  after          Json?    // JSONB: redacted state after action
   details        Json?    // JSONB: contextual audit event details
   createdAt      DateTime @default(now())
 
@@ -243,5 +303,26 @@ model AuditLog {
   user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, createdAt])
+  @@index([organizationId, action])
+  @@index([organizationId, entityType])
   @@map("audit_logs")
+}
+
+// Tenant Key Management for Envelope Encryption (packages/vault)
+model OrganizationKey {
+  id             String    @id @default(uuid())
+  organizationId String
+  keyVersion     Int       @default(1)
+  encryptedKey   String    // AES-256-GCM encrypted DEK under master key
+  masterKeyId    String    @default("v1")
+  algorithm      String    @default("aes-256-gcm")
+  status         String    @default("ACTIVE") // ACTIVE | RETIRED | REVOKED
+  createdAt      DateTime  @default(now())
+  rotatedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, keyVersion])
+  @@index([organizationId])
+  @@map("organization_keys")
 }

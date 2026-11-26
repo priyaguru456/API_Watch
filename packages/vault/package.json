@@ -1,0 +1,21 @@
+{
+  "name": "@apiwatch/vault",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./cli": "./src/cli.js"
+  },
+  "bin": {
+    "vault-rotate": "./bin/vault-rotate.js"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "rotate": "node ./bin/vault-rotate.js"
+  },
+  "dependencies": {
+    "@apiwatch/shared": "*",
+    "zod": "^3.24.2"
+  }
+}
