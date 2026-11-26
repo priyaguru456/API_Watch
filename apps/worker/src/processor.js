@@ -1,5 +1,5 @@
 import { prisma } from '@apiwatch/db';
-import { safeFetch } from '@apiwatch/ssrf-guard';
+import { safeRequest } from '@apiwatch/ssrf-guard';
 import { logger } from './logger.js';
 
 /**
@@ -48,7 +48,8 @@ export async function processMonitorCheck(job) {
   let responseHeaders = null;
 
   try {
-    const result = await safeFetch(monitor.url, {
+    const result = await safeRequest({
+      url: monitor.url,
       method: monitor.method,
       headers: monitor.headers && typeof monitor.headers === 'object' ? monitor.headers : {},
       timeoutMs: (monitor.timeoutSeconds || 30) * 1000,

@@ -37,6 +37,31 @@ export default [
     },
   },
   {
+    files: ['apps/worker/**/*.{js,mjs}'],
+    rules: {
+      'no-restricted-globals': [
+        'error',
+        {
+          name: 'fetch',
+          message:
+            'Direct fetch is strictly forbidden in worker code. All outbound HTTP monitoring requests must route exclusively through @apiwatch/ssrf-guard safeRequest.',
+        },
+      ],
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'axios',
+              message:
+                'Direct axios is strictly forbidden in worker code. All outbound HTTP monitoring requests must route exclusively through @apiwatch/ssrf-guard safeRequest.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     ignores: [
       '**/node_modules/**',
       '**/dist/**',
