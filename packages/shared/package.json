@@ -8,7 +8,8 @@
     "./env": "./src/env.js",
     "./errors": "./src/errors.js",
     "./crypto": "./src/crypto.js",
-    "./schemas": "./src/schemas.js"
+    "./schemas": "./src/schemas.js",
+    "./redact": "./src/redact.js"
   },
   "scripts": {
     "test": "vitest run"
