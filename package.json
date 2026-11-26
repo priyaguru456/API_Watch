@@ -1,19 +1,50 @@
 {
   "name": "apiwatch",
   "version": "1.0.0",
-  "description": "APIWatch — API Monitoring and Reliability Platform",
+  "description": "APIWatch — Multi-tenant API monitoring and reliability platform",
   "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "dev:backend": "npm --prefix backend run dev",
-    "dev:frontend": "npm --prefix frontend run dev",
-    "build:frontend": "npm --prefix frontend run build"
+    "dev": "npm --workspace=@apiwatch/api run dev",
+    "dev:api": "npm --workspace=@apiwatch/api run dev",
+    "dev:worker": "npm --workspace=@apiwatch/worker run dev",
+    "dev:web": "npm --workspace=@apiwatch/web run dev",
+    "build": "npm run --workspaces --if-present build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:generate": "npm --workspace=@apiwatch/db run generate",
+    "db:push": "npm --workspace=@apiwatch/db run push",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
   },
   "keywords": [
     "api-monitoring",
     "uptime",
     "reliability",
-    "observability"
+    "observability",
+    "multi-tenant",
+    "bullmq",
+    "prisma",
+    "postgres",
+    "redis"
   ],
-  "author": "",
-  "license": "ISC"
+  "author": "APIWatch Team",
+  "license": "ISC",
+  "devDependencies": {
+    "@eslint/js": "^9.20.0",
+    "dotenv": "^16.4.7",
+    "eslint": "^9.20.0",
+    "globals": "^15.15.0",
+    "prettier": "^3.5.1",
+    "supertest": "^7.0.0",
+    "vitest": "^3.0.5"
+  }
 }

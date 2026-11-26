@@ -6,16 +6,13 @@ node_modules/
 # Environment Variables
 .env
 .env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*.local
 *.env
 
 # Build outputs
 dist/
 build/
 out/
-.next/
 
 # Logs
 logs/
@@ -41,6 +38,5 @@ coverage/
 .DS_Store
 Thumbs.db
 
-# Database / Prisma
-*.sqlite
-*.sqlite-journal
+# Database / Prisma generated files (if any)
+packages/db/generated/
