@@ -40,10 +40,12 @@ APIWatch/
 ## Authentication & Multi-Tenancy Architecture
 
 ### 1. Password Hashing
+
 - Passwords hashed using **Argon2id** (memory: 19456 KB, iterations: 2, parallelism: 1).
 - Fallback to secure Node.js native `crypto.scrypt` when native compilation is absent.
 
 ### 2. Token Lifecycle & Rotation
+
 - **Access Token:** Short-lived JWT (15 minutes), containing `{ sub: userId, email, jti: uuid }`.
 - **Refresh Token:** Cryptographically strong token stored hashed (SHA-256) in the database with an assigned `family` UUID.
 - **HTTP-Only Secure Cookie:** Delivered via `Set-Cookie: refresh_token=...; HttpOnly; SameSite=Lax; Path=/; Secure`.
@@ -52,6 +54,7 @@ APIWatch/
 - **Login Rate Limiting:** Sliding window limiter protects `/api/v1/auth/login` (default max 5 attempts per 15 minutes per IP + email).
 
 ### 3. Tenant RBAC & Middleware Guards
+
 - **Roles:** `OWNER` (rank 4) > `ADMIN` (rank 3) > `ENGINEER` (rank 2) > `VIEWER` (rank 1).
 - `resolveOrg`: Scopes requests by verifying user's active membership in `organizationId` (from route params, query, or `X-Organization-Id` header). Returns 403 Forbidden for cross-tenant access.
 - `requireRole(...roles)`: Verifies minimum role or explicit membership rank before mutation.
@@ -127,6 +130,7 @@ npm run dev:web
 ## Health & Readiness Probes
 
 ### Liveness Probe (`/health` and `/api/v1/health`)
+
 Returns immediate HTTP 200 indicating the API service process is up.
 
 ```bash
@@ -134,6 +138,7 @@ curl -i http://localhost:5000/health
 ```
 
 ### Readiness Probe (`/ready` and `/api/v1/ready`)
+
 Verifies live connectivity to both PostgreSQL (via `SELECT 1`) and Redis (via `PING`).
 
 ```bash
@@ -141,6 +146,7 @@ curl -i http://localhost:5000/ready
 ```
 
 **Response when healthy (200 OK):**
+
 ```json
 {
   "status": "ready",
@@ -163,12 +169,14 @@ curl -i http://localhost:5000/ready
 ## API Endpoints Reference
 
 ### Authentication
+
 - `POST /api/v1/auth/register` - Register user & default organization (role `OWNER`).
 - `POST /api/v1/auth/login` - Authenticate, returns access token, sets rotating refresh token cookie.
 - `POST /api/v1/auth/refresh` - Rotates refresh token in cookie, issues new access token (CSRF protected).
 - `POST /api/v1/auth/logout` - Revokes session and clears cookie.
 
 ### Organizations & RBAC
+
 - `GET /api/v1/orgs/:organizationId/members` - List organization members.
 - `POST /api/v1/orgs/:organizationId/invites` - Invite a new member (`OWNER` or `ADMIN`).
 - `POST /api/v1/invites/:token/accept` - Accept invitation and join organization.
@@ -190,6 +198,7 @@ npm run test:watch
 ```
 
 Test coverage includes:
+
 - Multi-tenant boundary isolation (proving User A cannot read or mutate Org B data).
 - Rotating refresh token replay detection and token family revocation.
 - CSRF protection for cookie flows.
