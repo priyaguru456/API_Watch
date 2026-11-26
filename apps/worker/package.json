@@ -1,0 +1,22 @@
+{
+  "name": "@apiwatch/worker",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./src/index.js",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@apiwatch/db": "*",
+    "@apiwatch/shared": "*",
+    "@apiwatch/ssrf-guard": "*",
+    "bullmq": "^5.41.0",
+    "ioredis": "^5.5.0",
+    "pino": "^9.6.0"
+  },
+  "devDependencies": {
+    "pino-pretty": "^13.0.0"
+  }
+}

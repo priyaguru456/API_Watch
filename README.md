@@ -1,164 +1,214 @@
-# APIWatch — API Monitoring and Reliability Platform
+# APIWatch — Multi-Tenant API Monitoring and Reliability Platform
 
-APIWatch is a modern, developer-centric API monitoring, uptime tracking, and reliability platform. It allows engineering teams to continuously monitor their APIs and websites, run automated health checks, measure response latency, detect degradation, manage incidents, and receive real-time alerts.
-
----
-
-## Features
-
-- **Continuous Health Checks:** Automated scheduled polling of HTTP/HTTPS endpoints and websites.
-- **Latency & Uptime Tracking:** High-precision tracking of response times, status codes, and availability metrics.
-- **Anomaly & Failure Detection:** Instant detection of downtime, 4xx/5xx HTTP errors, and latency spikes.
-- **Incident Lifecycle Management:** Automatically create, acknowledge, update, and resolve incidents.
-- **Real-Time Alerting:** Notify engineering teams across channels (Email, Webhooks) when services go down.
-- **Performance Analytics:** Historical uptime charts, latency percentiles (p50, p95, p99), and SLA reporting.
-- **Multi-Service Catalog:** Group and manage monitoring targets by environment, service tier, and tags.
+APIWatch is a developer-centric, multi-tenant API monitoring, uptime tracking, and reliability platform. It continuously probes HTTP/HTTPS endpoints, tracks latency percentiles, detects outages, manages incident lifecycles, and triggers real-time alerts.
 
 ---
 
-## Technology Stack
+## Architecture & Monorepo Layout
 
-### Frontend
-- **Framework:** React.js (JavaScript, JSX)
-- **Build Tool:** Vite
-- **Styling:** Tailwind CSS
-- **Routing:** React Router DOM
-- **HTTP Client:** Axios
-- **Server State Management:** TanStack Query (React Query)
-- **Forms & Validation:** React Hook Form + Zod (`@hookform/resolvers`)
-- **Visualizations:** Recharts
-- **Icons:** Lucide React
-
-### Backend
-- **Runtime:** Node.js (ES Modules, `"type": "module"`)
-- **Framework:** Express.js
-- **Database:** PostgreSQL
-- **ORM:** Prisma ORM
-- **Authentication:** JWT (JSON Web Tokens) + bcrypt
-- **Request Validation:** Zod
-- **Security & Logging:** Helmet, CORS, Morgan
-
-### Future Infrastructure
-- Redis & BullMQ (Background worker and scheduler)
-- Docker & Nginx
-- Playwright & Vitest
-
----
-
-## Project Structure
+APIWatch is structured as an npm workspaces monorepo:
 
 ```text
 APIWatch/
-│
-├── frontend/                     # React.js Vite Frontend Application
-│   ├── public/                   # Static assets
-│   ├── src/
-│   │   ├── app/                  # Router and application providers
-│   │   ├── layouts/              # Dashboard, Auth, and Marketing layouts
-│   │   ├── pages/                # Page components (Dashboard, Services, Incidents, etc.)
-│   │   ├── components/           # Reusable UI, Navigation, Charts, Tables
-│   │   ├── services/             # Axios API client and feature API endpoints
-│   │   ├── hooks/                # Custom React hooks
-│   │   ├── context/              # React Context (AuthContext)
-│   │   ├── utils/                # Date, formatters, and helper utilities
-│   │   ├── constants/            # Routes and configuration constants
-│   │   ├── validation/           # Client-side Zod validation schemas
-│   │   ├── main.jsx              # React DOM entry point
-│   │   ├── App.jsx               # Application root component
-│   │   └── index.css             # Global styles and Tailwind directives
-│   ├── vite.config.js            # Vite configuration
-│   └── package.json              # Frontend dependencies and scripts
-│
-├── backend/                      # Node.js Express Backend Application
-│   ├── src/
-│   │   ├── server.js             # HTTP server listener
-│   │   ├── app.js                # Express app configuration & middleware pipeline
-│   │   ├── config/               # Environment, database (Prisma), logger, security configs
-│   │   ├── routes/               # Centralized API route index
-│   │   ├── middleware/           # Error, not-found, auth, validation, rate-limit middlewares
-│   │   ├── modules/              # Feature modules (auth, users, services, monitoring, etc.)
-│   │   ├── services/             # Cross-cutting services (email, notifications, encryption)
-│   │   └── utils/                # ApiError, asyncHandler, ApiResponse helpers
-│   ├── prisma/                   # Prisma schema and migrations
-│   ├── tests/                    # Backend unit and integration tests
-│   └── package.json              # Backend dependencies and scripts (ES Modules)
-│
-├── docs/                         # Architecture, API specifications, and guides
-├── scripts/                      # Developer and deployment automation scripts
-├── tests/                        # End-to-end integration test suites
-├── .gitignore                    # Git ignore rules for node_modules, env, logs
-├── .env.example                  # Environment variable reference template
-├── README.md                     # Project documentation
-└── package.json                  # Root convenience scripts (non-monorepo)
+├── apps/
+│   ├── api/                   # Express HTTP API with Pino logging & request IDs
+│   ├── web/                   # React 19 + Vite dashboard application
+│   └── worker/                # BullMQ queue processor for scheduled checks
+├── packages/
+│   ├── db/                    # Prisma ORM client with PostgreSQL 16 schema
+│   ├── shared/                # Zod-validated typed env loader, errors, AES-256-GCM crypto
+│   └── ssrf-guard/            # Outbound HTTP monitoring client with SSRF & DNS rebinding protection
+├── docker-compose.yml         # PostgreSQL 16 (named volume, healthcheck) + Redis 7
+├── .env.example               # Root environment variable template
+├── vitest.config.js           # Monorepo-wide Vitest configuration
+├── eslint.config.js           # ESLint 9 configuration
+└── package.json               # Root npm workspaces configuration
 ```
 
 ---
 
-## Environment Setup
+## Architectural Rules & Guarantees
 
-1. Copy the environment template into both `backend/` and `frontend/`:
-   ```bash
-   cp .env.example backend/.env
-   cp .env.example frontend/.env
-   ```
-2. Configure `backend/.env`:
-   - `PORT=5000`
-   - `DATABASE_URL=postgresql://user:password@localhost:5432/apiwatch_db?schema=public`
-   - `JWT_SECRET=your_secret_key_here`
-   - `CORS_ORIGIN=http://localhost:5173`
-3. Configure `frontend/.env`:
-   - `VITE_API_BASE_URL=http://localhost:5000/api/v1`
+1. **Multi-Tenant Isolation:** Every database query and worker job is strictly scoped by `organizationId`. Client-supplied IDs are never trusted without tenant verification.
+2. **Postgres 16 Features:** Uses JSONB for flexible check configs and assertion rules, native enums (`MembershipRole`, `HttpMethod`, `MonitorStatus`, `IncidentStatus`), and raw SQL (`$queryRaw`) for rollups and percentiles.
+3. **Zod Validation & Central Error Handling:** All inputs are validated with Zod schemas. Centralized error handling guarantees stack traces are **never leaked** in client API responses.
+4. **Encryption at Rest:** Secrets and sensitive authentication headers are encrypted at rest with AES-256-GCM and never returned in API payloads or printed in logs.
+5. **SSRF Guarding:** All outbound network probes route strictly through `@apiwatch/ssrf-guard`, preventing access to private IPv4/IPv6 subnets (127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, link-local, AWS/cloud metadata 169.254.169.254) with IP pinning against DNS rebinding.
 
 ---
 
-## Installation & Setup
+## Authentication & Multi-Tenancy Architecture
 
-Install dependencies separately in `backend` and `frontend`:
+### 1. Password Hashing
+- Passwords hashed using **Argon2id** (memory: 19456 KB, iterations: 2, parallelism: 1).
+- Fallback to secure Node.js native `crypto.scrypt` when native compilation is absent.
 
-### 1. Backend Setup
+### 2. Token Lifecycle & Rotation
+- **Access Token:** Short-lived JWT (15 minutes), containing `{ sub: userId, email, jti: uuid }`.
+- **Refresh Token:** Cryptographically strong token stored hashed (SHA-256) in the database with an assigned `family` UUID.
+- **HTTP-Only Secure Cookie:** Delivered via `Set-Cookie: refresh_token=...; HttpOnly; SameSite=Lax; Path=/; Secure`.
+- **Rotation & Replay Detection:** On each `/api/v1/auth/refresh`, the previous token is invalidated, and a new token in the same family is issued. If a revoked token is re-submitted (indicating token theft or replay), the entire token family is immediately revoked.
+- **CSRF Protection:** Cookie-based operations enforce double-submit verification matching the `csrf_token` cookie against the `X-CSRF-Token` request header.
+- **Login Rate Limiting:** Sliding window limiter protects `/api/v1/auth/login` (default max 5 attempts per 15 minutes per IP + email).
+
+### 3. Tenant RBAC & Middleware Guards
+- **Roles:** `OWNER` (rank 4) > `ADMIN` (rank 3) > `ENGINEER` (rank 2) > `VIEWER` (rank 1).
+- `resolveOrg`: Scopes requests by verifying user's active membership in `organizationId` (from route params, query, or `X-Organization-Id` header). Returns 403 Forbidden for cross-tenant access.
+- `requireRole(...roles)`: Verifies minimum role or explicit membership rank before mutation.
+- **Invite Member Flow:** `OWNER` or `ADMIN` creates an invitation (`POST /api/v1/orgs/:organizationId/invites`), and the invited user accepts it (`POST /api/v1/invites/:token/accept`).
+
+---
+
+## Prerequisites
+
+- **Node.js:** v20.0.0+ (Tested on Node 26)
+- **npm:** v10+ (Workspaces enabled)
+- **Docker & Docker Compose:** Docker Compose v2+
+
+---
+
+## Quickstart
+
+### 1. Clone & Configure Environment
+
 ```bash
-cd backend
+cp .env.example .env
+```
+
+Verify or adjust environment variables in `.env` (defaults work out of the box with Docker Compose):
+
+```ini
+PORT=5000
+DATABASE_URL=postgresql://postgres:postgrespassword@localhost:5432/apiwatch?schema=public
+REDIS_URL=redis://localhost:6379
+JWT_SECRET=apiwatch_dev_super_secret_jwt_key_at_least_32_characters_long
+ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+### 2. Start Infrastructure Containers
+
+Start PostgreSQL 16 and Redis 7 in the background:
+
+```bash
+docker compose up -d
+```
+
+Verify services and healthchecks:
+
+```bash
+docker compose ps
+```
+
+### 3. Install Dependencies & Generate Prisma Client
+
+```bash
 npm install
+npm run db:generate
+npm run db:push
 ```
 
-### 2. Frontend Setup
+### 4. Run Development Servers
+
+Run services individually or concurrently:
+
 ```bash
-cd frontend
-npm install
+# Run Express API server (starts on http://localhost:5000)
+npm run dev:api
+
+# Run BullMQ background worker
+npm run dev:worker
+
+# Run React Vite frontend (starts on http://localhost:5173)
+npm run dev:web
 ```
 
 ---
 
-## Development Commands
+## Health & Readiness Probes
 
-### Running Backend
+### Liveness Probe (`/health` and `/api/v1/health`)
+Returns immediate HTTP 200 indicating the API service process is up.
+
 ```bash
-cd backend
-npm run dev
-```
-Backend starts on `http://localhost:5000`. Test health endpoint:
-```bash
-curl http://localhost:5000/api/v1/health
+curl -i http://localhost:5000/health
 ```
 
-### Running Frontend
-```bash
-cd frontend
-npm run dev
-```
-Frontend development server starts on `http://localhost:5173`.
+### Readiness Probe (`/ready` and `/api/v1/ready`)
+Verifies live connectivity to both PostgreSQL (via `SELECT 1`) and Redis (via `PING`).
 
-### Building Frontend for Production
 ```bash
-cd frontend
-npm run build
-npm run preview
+curl -i http://localhost:5000/ready
+```
+
+**Response when healthy (200 OK):**
+```json
+{
+  "status": "ready",
+  "checks": {
+    "database": {
+      "status": "healthy",
+      "latencyMs": 2
+    },
+    "redis": {
+      "status": "healthy",
+      "latencyMs": 1
+    }
+  },
+  "timestamp": "2026-11-26T12:00:00.000Z"
+}
 ```
 
 ---
 
-## Git Workflow
+## API Endpoints Reference
 
-- **Default Branch:** `main`
-- **Branches:** Create feature branches from `main` (e.g., `feature/monitoring-engine`).
-- **Commits:** Follow conventional commit messages (e.g., `feat: add endpoint health checks`).
+### Authentication
+- `POST /api/v1/auth/register` - Register user & default organization (role `OWNER`).
+- `POST /api/v1/auth/login` - Authenticate, returns access token, sets rotating refresh token cookie.
+- `POST /api/v1/auth/refresh` - Rotates refresh token in cookie, issues new access token (CSRF protected).
+- `POST /api/v1/auth/logout` - Revokes session and clears cookie.
+
+### Organizations & RBAC
+- `GET /api/v1/orgs/:organizationId/members` - List organization members.
+- `POST /api/v1/orgs/:organizationId/invites` - Invite a new member (`OWNER` or `ADMIN`).
+- `POST /api/v1/invites/:token/accept` - Accept invitation and join organization.
+- `GET /api/v1/orgs/:organizationId/monitors` - List monitors scoped strictly by organization.
+- `POST /api/v1/orgs/:organizationId/monitors` - Create monitor (`OWNER`, `ADMIN`, `ENGINEER`).
+
+---
+
+## Testing
+
+APIWatch includes comprehensive unit and integration test suites covering all security and tenant boundaries:
+
+```bash
+# Run all Vitest suites (42+ tests passing)
+npm test
+
+# Run tests in watch mode
+npm run test:watch
+```
+
+Test coverage includes:
+- Multi-tenant boundary isolation (proving User A cannot read or mutate Org B data).
+- Rotating refresh token replay detection and token family revocation.
+- CSRF protection for cookie flows.
+- Argon2 password hashing and login rate limiting.
+- Liveness and readiness probes under both healthy and degraded conditions.
+- Strict stack-trace suppression across all 4xx/5xx error responses.
+- SSRF guard IPv4/IPv6 private IP filtering and DNS rebinding prevention.
+
+---
+
+## Code Quality & Formatting
+
+```bash
+# Lint with ESLint 9
+npm run lint
+
+# Check formatting with Prettier
+npm run format:check
+
+# Format codebase
+npm run format
+```
