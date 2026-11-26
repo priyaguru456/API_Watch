@@ -1,0 +1,21 @@
+{
+  "name": "@apiwatch/db",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "generate": "prisma generate",
+    "push": "prisma db push",
+    "migrate": "prisma migrate dev"
+  },
+  "dependencies": {
+    "@apiwatch/shared": "*",
+    "@prisma/client": "^6.4.1"
+  },
+  "devDependencies": {
+    "prisma": "^6.4.1"
+  }
+}
