@@ -1,0 +1,16 @@
+{
+  "name": "@apiwatch/ingest",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@apiwatch/db": "*",
+    "@apiwatch/shared": "*",
+    "express": "^4.21.2"
+  }
+}
