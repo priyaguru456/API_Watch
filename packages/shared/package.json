@@ -1,0 +1,20 @@
+{
+  "name": "@apiwatch/shared",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./env": "./src/env.js",
+    "./errors": "./src/errors.js",
+    "./crypto": "./src/crypto.js",
+    "./schemas": "./src/schemas.js"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "zod": "^3.24.2"
+  }
+}
