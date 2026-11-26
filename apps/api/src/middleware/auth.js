@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { prisma } from '@apiwatch/db';
 import { UnauthorizedError, ForbiddenError, BadRequestError } from '@apiwatch/shared';
 import { verifyAccessToken } from '../utils/tokens.js';
@@ -10,30 +11,121 @@ const ROLE_RANKS = {
   VIEWER: 1,
 };
 
-/**
- * Middleware that authenticates JWT Bearer tokens and attaches req.user.
- */
-export function requireAuth(req, _res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return next(new UnauthorizedError('Missing or malformed Authorization header'));
-  }
+// Default permission matrix for native roles
+const DEFAULT_ROLE_PERMISSIONS = {
+  OWNER: ['*'],
+  ADMIN: ['monitors:*', 'members:*', 'roles:*', 'api_keys:*', 'audit:*', 'settings:*'],
+  ENGINEER: [
+    'monitors:read',
+    'monitors:create',
+    'monitors:update',
+    'monitors:delete',
+    'api_keys:read',
+    'api_keys:create',
+  ],
+  VIEWER: ['monitors:read', 'members:read', 'audit:read'],
+};
 
-  const token = authHeader.slice(7).trim();
-  try {
-    const payload = verifyAccessToken(token);
-    req.user = {
-      id: payload.sub,
-      email: payload.email,
-    };
-    next();
-  } catch (_err) {
-    return next(new UnauthorizedError('Invalid, malformed, or expired access token'));
+/**
+ * Checks if a granted permission (e.g. "monitors:*", "*", or "monitors:create")
+ * satisfies a required permission (e.g. "monitors:create").
+ *
+ * @param {string} granted
+ * @param {string} required
+ * @returns {boolean}
+ */
+export function matchesPermission(granted, required) {
+  if (granted === '*' || granted === required) return true;
+  if (granted.endsWith(':*')) {
+    const prefix = granted.slice(0, -2);
+    return required.startsWith(`${prefix}:`);
   }
+  return false;
 }
 
 /**
- * Org-scoped middleware: Resolves the target organization and user's role in it.
+ * Middleware that authenticates JWT Bearer tokens or Hashed API Keys and attaches req.user.
+ *
+ * @param {object} [options]
+ * @param {import('@prisma/client').PrismaClient} [options.db]
+ */
+export function createRequireAuthMiddleware(options = {}) {
+  const db = options.db || prisma;
+
+  return async (req, _res, next) => {
+    const authHeader = req.headers.authorization;
+    const apiKeyHeader = req.headers['x-api-key'];
+
+    const apiKeyToken =
+      (typeof apiKeyHeader === 'string' && apiKeyHeader.trim()) ||
+      (authHeader && authHeader.startsWith('Bearer ak_') ? authHeader.slice(7).trim() : null);
+
+    // 1. API Key Authentication Flow
+    if (apiKeyToken) {
+      try {
+        const keyHash = crypto.createHash('sha256').update(apiKeyToken).digest('hex');
+        const apiKey = await db.apiKey.findUnique({
+          where: { keyHash },
+          include: { organization: true },
+        });
+
+        if (!apiKey || apiKey.isRevoked) {
+          return next(new UnauthorizedError('Invalid, expired, or revoked API key'));
+        }
+
+        if (apiKey.expiresAt && new Date() > new Date(apiKey.expiresAt)) {
+          return next(new UnauthorizedError('API key has expired'));
+        }
+
+        // Track last-used timestamp asynchronously
+        db.apiKey
+          .update({
+            where: { id: apiKey.id },
+            data: { lastUsedAt: new Date() },
+          })
+          .catch(() => {});
+
+        req.apiKey = apiKey;
+        req.user = {
+          id: apiKey.userId || 'api-key-actor',
+          email: 'apikey@apiwatch.io',
+          isApiKey: true,
+        };
+        req.organizationId = apiKey.organizationId;
+        req.org = apiKey.organization;
+        req.orgRole = 'ADMIN'; // API keys operate with Admin rank within their granted scopes
+        req.permissions = Array.isArray(apiKey.scopes) ? apiKey.scopes : [];
+
+        return next();
+      } catch (err) {
+        return next(err);
+      }
+    }
+
+    // 2. JWT Bearer Token Authentication Flow
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return next(new UnauthorizedError('Missing or malformed Authorization header'));
+    }
+
+    const token = authHeader.slice(7).trim();
+    try {
+      const payload = verifyAccessToken(token);
+      req.user = {
+        id: payload.sub,
+        email: payload.email,
+        name: payload.name,
+      };
+      next();
+    } catch (_err) {
+      return next(new UnauthorizedError('Invalid, malformed, or expired access token'));
+    }
+  };
+}
+
+export const requireAuth = createRequireAuthMiddleware();
+
+/**
+ * Org-scoped middleware: Resolves the target organization and user's role/permissions in it.
  * Strictly guarantees multi-tenant isolation by checking the user's membership.
  *
  * @param {object} [options]
@@ -45,6 +137,11 @@ export function createResolveOrgMiddleware(options = {}) {
   return async (req, _res, next) => {
     if (!req.user || !req.user.id) {
       return next(new UnauthorizedError('Authentication required before organization scoping'));
+    }
+
+    // If request was already scoped via API key
+    if (req.apiKey && req.organizationId) {
+      return next();
     }
 
     const orgId =
@@ -72,11 +169,11 @@ export function createResolveOrgMiddleware(options = {}) {
         },
         include: {
           organization: true,
+          customRole: true,
         },
       });
 
       if (!membership) {
-        // User does not belong to this organization -> Block access
         return next(new ForbiddenError('Access denied: You are not a member of this organization'));
       }
 
@@ -84,6 +181,11 @@ export function createResolveOrgMiddleware(options = {}) {
       req.org = membership.organization;
       req.membership = membership;
       req.orgRole = membership.role;
+
+      // Resolve combined permissions from standard role and custom role
+      const standardPerms = DEFAULT_ROLE_PERMISSIONS[membership.role] || [];
+      const customPerms = membership.customRole?.permissions || [];
+      req.permissions = Array.from(new Set([...standardPerms, ...customPerms]));
 
       next();
     } catch (err) {
@@ -100,7 +202,7 @@ export const resolveOrg = createResolveOrgMiddleware();
  */
 export function requireRole(...allowedRoles) {
   return (req, _res, next) => {
-    if (!req.membership || !req.orgRole) {
+    if (!req.orgRole) {
       return next(
         new ForbiddenError('Cannot check role: Organization context has not been resolved')
       );
@@ -109,7 +211,6 @@ export function requireRole(...allowedRoles) {
     const userRoleRank = ROLE_RANKS[req.orgRole] || 0;
     const minRequiredRank = Math.min(...allowedRoles.map((r) => ROLE_RANKS[r] || 99));
 
-    // Check if user has sufficient rank or explicit role match
     const hasPermission = userRoleRank >= minRequiredRank || allowedRoles.includes(req.orgRole);
 
     if (!hasPermission) {
@@ -118,6 +219,38 @@ export function requireRole(...allowedRoles) {
           `Insufficient permissions: Action requires one of [${allowedRoles.join(
             ', '
           )}], but current role is ${req.orgRole}`
+        )
+      );
+    }
+
+    next();
+  };
+}
+
+/**
+ * Permission guard middleware: Ensures the user or API key possesses
+ * the necessary granular permissions (e.g., 'monitors:create', 'members:invite').
+ * Resolves against custom roles table, standard role matrix, and API key scopes.
+ *
+ * @param {...string} requiredPermissions
+ */
+export function requirePermission(...requiredPermissions) {
+  return (req, _res, next) => {
+    if (!req.permissions || !Array.isArray(req.permissions)) {
+      return next(
+        new ForbiddenError('Cannot check permission: Organization permissions context is missing')
+      );
+    }
+
+    const granted = req.permissions;
+    const hasAll = requiredPermissions.every((required) =>
+      granted.some((g) => matchesPermission(g, required))
+    );
+
+    if (!hasAll) {
+      return next(
+        new ForbiddenError(
+          `Insufficient permissions: Action requires permission [${requiredPermissions.join(', ')}]`
         )
       );
     }

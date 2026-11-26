@@ -36,6 +36,39 @@ export function verifyAccessToken(token) {
 }
 
 /**
+ * Generates a short-lived 2FA challenge JWT (5 minutes).
+ * @param {{ id: string, email: string }} user
+ * @returns {string}
+ */
+export function generateChallengeToken(user) {
+  return jwt.sign(
+    {
+      sub: user.id,
+      email: user.email,
+      type: '2fa_challenge',
+      jti: crypto.randomUUID(),
+    },
+    env.JWT_SECRET,
+    {
+      expiresIn: '5m',
+    }
+  );
+}
+
+/**
+ * Verifies a 2FA challenge token.
+ * @param {string} token
+ * @returns {{ sub: string, email: string, type: string }}
+ */
+export function verifyChallengeToken(token) {
+  const payload = jwt.verify(token, env.JWT_SECRET);
+  if (payload.type !== '2fa_challenge') {
+    throw new Error('Invalid token purpose: Expected 2fa_challenge');
+  }
+  return payload;
+}
+
+/**
  * Generates a cryptographically strong refresh token string.
  * @returns {string}
  */

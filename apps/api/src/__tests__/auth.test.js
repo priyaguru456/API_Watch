@@ -3,6 +3,7 @@ import request from 'supertest';
 import { createApp } from '../app.js';
 import { createMockPrisma } from './mock-db.js';
 import { LoginRateLimiter } from '../middleware/rate-limiter.js';
+import { generateTotpCode } from '../utils/totp.js';
 
 describe('Authentication & Token Flow (apps/api)', () => {
   let db;
@@ -39,6 +40,10 @@ describe('Authentication & Token Flow (apps/api)', () => {
       expect(refreshCookie).toBeDefined();
       expect(refreshCookie).toContain('HttpOnly');
       expect(csrfCookie).toBeDefined();
+
+      // Verify audit log
+      const audit = await db.auditLog.findMany({ where: { action: 'AUTH_REGISTER' } });
+      expect(audit.length).toBeGreaterThan(0);
     });
 
     it('rejects registration when email already exists with 409 Conflict', async () => {
@@ -130,7 +135,6 @@ describe('Authentication & Token Flow (apps/api)', () => {
     });
 
     it('enforces CSRF protection on refresh: blocks request if X-CSRF-Token header does not match cookie', async () => {
-      // 1. Register to obtain cookies
       const regRes = await request(app).post('/api/v1/auth/register').send({
         email: 'charlie@example.com',
         password: 'Password123!',
@@ -138,13 +142,11 @@ describe('Authentication & Token Flow (apps/api)', () => {
 
       const cookies = regRes.headers['set-cookie'];
 
-      // 2. Attempt refresh with cookies but without CSRF header
       const resWithoutCsrf = await request(app).post('/api/v1/auth/refresh').set('Cookie', cookies);
 
       expect(resWithoutCsrf.status).toBe(403);
       expect(resWithoutCsrf.body.error).toContain('CSRF');
 
-      // 3. Attempt refresh with mismatched CSRF header
       const resWithWrongCsrf = await request(app)
         .post('/api/v1/auth/refresh')
         .set('Cookie', cookies)
@@ -172,7 +174,6 @@ describe('Authentication & Token Flow (apps/api)', () => {
       expect(typeof refreshRes.body.accessToken).toBe('string');
       expect(refreshRes.body.accessToken).not.toBe(regRes.body.accessToken);
 
-      // Verify a new rotating refresh cookie was set
       const newCookies = refreshRes.headers['set-cookie'];
       expect(newCookies.some((c) => c.startsWith('refresh_token='))).toBe(true);
     });
@@ -186,14 +187,12 @@ describe('Authentication & Token Flow (apps/api)', () => {
       const originalCookies = regRes.headers['set-cookie'];
       const csrfToken = regRes.body.csrfToken;
 
-      // 1. First legitimate rotation
       const rotateRes = await request(app)
         .post('/api/v1/auth/refresh')
         .set('Cookie', originalCookies)
         .set('X-CSRF-Token', csrfToken);
       expect(rotateRes.status).toBe(200);
 
-      // 2. Attacker replays the original, now-revoked cookie!
       const replayRes = await request(app)
         .post('/api/v1/auth/refresh')
         .set('Cookie', originalCookies)
@@ -202,7 +201,6 @@ describe('Authentication & Token Flow (apps/api)', () => {
       expect(replayRes.status).toBe(401);
       expect(replayRes.body.error).toContain('Replay attack detected');
 
-      // 3. Even the newly rotated cookie is now revoked because the family was invalidated!
       const nextCookies = rotateRes.headers['set-cookie'];
       const nextCsrfToken = rotateRes.body.csrfToken;
       const subsequentRes = await request(app)
@@ -211,6 +209,130 @@ describe('Authentication & Token Flow (apps/api)', () => {
         .set('X-CSRF-Token', nextCsrfToken);
 
       expect(subsequentRes.status).toBe(401);
+    });
+  });
+
+  describe('Email Verification Flow', () => {
+    it('requests email verification and confirms verification token', async () => {
+      const regRes = await request(app).post('/api/v1/auth/register').send({
+        email: 'verify-me@example.com',
+        password: 'Password123!',
+      });
+
+      // Request verification token
+      const reqRes = await request(app)
+        .post('/api/v1/auth/verify-email/request')
+        .send({ email: 'verify-me@example.com' });
+
+      expect(reqRes.status).toBe(200);
+      expect(reqRes.body.success).toBe(true);
+      const token = reqRes.body.token;
+      expect(token).toBeDefined();
+
+      // Confirm verification
+      const confirmRes = await request(app)
+        .post('/api/v1/auth/verify-email/confirm')
+        .send({ token });
+
+      expect(confirmRes.status).toBe(200);
+      expect(confirmRes.body.success).toBe(true);
+
+      const user = await db.user.findUnique({ where: { id: regRes.body.user.id } });
+      expect(user.emailVerified).toBe(true);
+    });
+  });
+
+  describe('Password Reset Flow', () => {
+    it('requests password reset, completes reset with new argon2id password, and invalidates old tokens', async () => {
+      await request(app).post('/api/v1/auth/register').send({
+        email: 'reset-pwd@example.com',
+        password: 'OldPassword123!',
+      });
+
+      // Request reset
+      const reqRes = await request(app)
+        .post('/api/v1/auth/password-reset/request')
+        .send({ email: 'reset-pwd@example.com' });
+
+      expect(reqRes.status).toBe(200);
+      const resetToken = reqRes.body.token;
+      expect(resetToken).toBeDefined();
+
+      // Confirm reset with new password
+      const confirmRes = await request(app)
+        .post('/api/v1/auth/password-reset/confirm')
+        .send({ token: resetToken, newPassword: 'NewPassword999!' });
+
+      expect(confirmRes.status).toBe(200);
+      expect(confirmRes.body.success).toBe(true);
+
+      // Verify old password no longer works
+      const oldLogin = await request(app).post('/api/v1/auth/login').send({
+        email: 'reset-pwd@example.com',
+        password: 'OldPassword123!',
+      });
+      expect(oldLogin.status).toBe(401);
+
+      // Verify new password works
+      const newLogin = await request(app).post('/api/v1/auth/login').send({
+        email: 'reset-pwd@example.com',
+        password: 'NewPassword999!',
+      });
+      expect(newLogin.status).toBe(200);
+      expect(newLogin.body.success).toBe(true);
+    });
+  });
+
+  describe('Optional TOTP 2FA Flow', () => {
+    it('executes full 2FA lifecycle: setup, enable, challenge on login, and code verification', async () => {
+      const regRes = await request(app).post('/api/v1/auth/register').send({
+        email: 'totp-user@example.com',
+        password: 'Password123!',
+      });
+      const token = regRes.body.accessToken;
+
+      // 1. Setup 2FA
+      const setupRes = await request(app)
+        .post('/api/v1/auth/2fa/setup')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(setupRes.status).toBe(200);
+      expect(setupRes.body.secret).toBeDefined();
+      expect(setupRes.body.uri).toContain('otpauth://totp/');
+      const secret = setupRes.body.secret;
+
+      // 2. Enable 2FA with generated code
+      const validCode = generateTotpCode(secret);
+      const enableRes = await request(app)
+        .post('/api/v1/auth/2fa/enable')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ code: validCode });
+
+      expect(enableRes.status).toBe(200);
+      expect(enableRes.body.success).toBe(true);
+
+      // 3. Login now returns 2FA challenge instead of tokens!
+      const loginRes = await request(app).post('/api/v1/auth/login').send({
+        email: 'totp-user@example.com',
+        password: 'Password123!',
+      });
+
+      expect(loginRes.status).toBe(200);
+      expect(loginRes.body.require2Fa).toBe(true);
+      expect(loginRes.body.challengeToken).toBeDefined();
+      const challengeToken = loginRes.body.challengeToken;
+
+      // 4. Verify 2FA code with challenge token
+      const currentCode = generateTotpCode(secret);
+      const verifyRes = await request(app).post('/api/v1/auth/2fa/verify').send({
+        challengeToken,
+        code: currentCode,
+      });
+
+      expect(verifyRes.status).toBe(200);
+      expect(verifyRes.body.success).toBe(true);
+      expect(typeof verifyRes.body.accessToken).toBe('string');
+      expect(verifyRes.body.user.email).toBe('totp-user@example.com');
     });
   });
 
@@ -232,7 +354,6 @@ describe('Authentication & Token Flow (apps/api)', () => {
       expect(logoutRes.status).toBe(200);
       expect(logoutRes.body.success).toBe(true);
 
-      // Verify clear cookie header
       const clearCookies = logoutRes.headers['set-cookie'];
       expect(clearCookies.some((c) => c.startsWith('refresh_token=;'))).toBe(true);
     });
